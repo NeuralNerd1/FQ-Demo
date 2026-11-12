@@ -2,25 +2,31 @@
 -- Idempotent: safe to re-run. Run in the Supabase SQL editor.
 
 DO $$
+DECLARE
+  m RECORD;
+  has_old BOOLEAN;
+  has_new BOOLEAN;
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posts' AND column_name='published') THEN
-    ALTER TABLE posts RENAME COLUMN published TO is_published;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posts' AND column_name='author') THEN
-    ALTER TABLE posts RENAME COLUMN author TO author_name;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='team' AND column_name='active') THEN
-    ALTER TABLE team RENAME COLUMN active TO is_visible;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='team' AND column_name='order_index') THEN
-    ALTER TABLE team RENAME COLUMN order_index TO display_order;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='case_studies' AND column_name='published') THEN
-    ALTER TABLE case_studies RENAME COLUMN published TO is_published;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='case_studies' AND column_name='industry') THEN
-    ALTER TABLE case_studies RENAME COLUMN industry TO client_industry;
-  END IF;
+  FOR m IN SELECT * FROM (VALUES
+    ('posts','published','is_published'),
+    ('posts','author','author_name'),
+    ('team','active','is_visible'),
+    ('team','order_index','display_order'),
+    ('case_studies','published','is_published'),
+    ('case_studies','industry','client_industry')
+  ) AS t(tbl, old_col, new_col)
+  LOOP
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=m.tbl AND column_name=m.old_col) INTO has_old;
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=m.tbl AND column_name=m.new_col) INTO has_new;
+    IF has_old AND has_new THEN
+      -- both exist: keep the new column, carry over old values where new is still default/null, drop old
+      EXECUTE format('UPDATE %I SET %I = %I WHERE %I IS DISTINCT FROM %I', m.tbl, m.new_col, m.old_col, m.new_col, m.old_col);
+      EXECUTE format('DROP INDEX IF EXISTS %I', m.tbl || '_' || m.old_col || '_idx');
+      EXECUTE format('ALTER TABLE %I DROP COLUMN %I CASCADE', m.tbl, m.old_col);
+    ELSIF has_old THEN
+      EXECUTE format('ALTER TABLE %I RENAME COLUMN %I TO %I', m.tbl, m.old_col, m.new_col);
+    END IF;
+  END LOOP;
 END $$;
 
 ALTER TABLE posts        ADD COLUMN IF NOT EXISTS author_name TEXT, ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
